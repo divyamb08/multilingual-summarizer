@@ -1,0 +1,79 @@
+/** @type {import('next').NextConfig} */
+const withPWA = require('next-pwa')({
+  dest: 'public',
+  disable: process.env.NODE_ENV === 'development',
+  // Cache PDF.js worker
+  runtimeCaching: [
+    {
+      urlPattern: /^https:\/\/unpkg\.com\/pdfjs-dist/,
+      handler: 'CacheFirst',
+      options: {
+        cacheName: 'pdf-js-assets',
+        expiration: {
+          maxEntries: 10,
+          maxAgeSeconds: 60 * 60 * 24 * 30 // 30 days
+        }
+      }
+    }
+  ]
+});
+
+const nextConfig = {
+  transpilePackages: ['pdfjs-dist'],
+  // Configure PDF.js handling
+  webpack: async (config, { isServer }) => {
+    // Add a rule to handle LICENSE files in node_modules
+    config.module.rules.push({
+      test: /LICENSE$/,
+      include: /node_modules\/langdetect/,
+      use: 'null-loader' // Use null-loader to ignore these files
+    });
+    
+    // Add support for importing PDF.js worker
+    config.module.rules.push({
+      test: /pdf\.worker\.(min\.)?js/,
+      type: 'asset/resource',
+      generator: {
+        filename: 'static/chunks/[name].[hash][ext]'
+      }
+    });
+    
+    // Handle Node.js modules that aren't available in the browser
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,  // Polyfill not needed for "fs"
+        path: require.resolve('path-browserify'),
+        stream: require.resolve('stream-browserify'),
+        buffer: require.resolve('buffer/'),
+        util: require.resolve('util/'),
+      };
+    }
+    
+    // Add polyfill to entry points - safer implementation
+    const originalEntry = config.entry;
+    config.entry = async () => {
+      const entries = await originalEntry();
+      
+      // Add polyfill to each entry point in a safe way
+      Object.keys(entries).forEach(entry => {
+        if (!isServer && entries[entry] && typeof entries[entry] === 'object') {
+          // Handle different entry structures
+          if (Array.isArray(entries[entry])) {
+            // If entry is an array, add polyfill at the beginning
+            entries[entry].unshift('./src/polyfills.ts');
+          } else if (entries[entry].import && Array.isArray(entries[entry].import)) {
+            // If entry has an import array, add polyfill at the beginning
+            entries[entry].import.unshift('./src/polyfills.ts');
+          }
+        }
+      });
+      
+      return entries;
+    };
+    
+    return config;
+  },
+};
+
+module.exports = withPWA(nextConfig);
